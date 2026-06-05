@@ -13,12 +13,16 @@ from selenium.webdriver.common.by import By
 from selenium.webdriver.common.keys import Keys
 import win32com.client
 import os
+import re
 
 # --- Configuração ---
 # (Você precisará baixar o "chromedriver" e colocar o caminho aqui,
 # ou deixar o Selenium 4+ baixá-lo automaticamente)f
 driver = webdriver.Chrome()
-wait = WebDriverWait(driver, 70) # Define um tempo de espera máximo (70 seg)
+wait = WebDriverWait(driver, 10)
+
+# Padrão oficial de código de rastreio dos Correios
+PADRAO_RASTREIO = re.compile(r'\b[A-Z]{2}\d{9}[A-Z]{2}\b')
 
 def validar_chamado_no_agilis(chamado, driver, wait):
     try:
@@ -26,18 +30,37 @@ def validar_chamado_no_agilis(chamado, driver, wait):
 
         # --- PASSO 1: Clicar na LUPA ---
         print("   - Clicando na lupa...")
-        try:
-            lupa = wait.until(EC.element_to_be_clickable(
-                (By.XPATH, "//*[@aria-label='Pesquisa']")
-            ))
-            lupa.click()
-        except TimeoutException:
-            lupa = wait.until(EC.element_to_be_clickable(
-                (By.XPATH, "//span[.//*[@aria-label='Pesquisa']]")
-            ))
-            lupa.click()
+        lupa_clicada = False
+        estrategias_lupa = [
+            (By.XPATH, "//*[@aria-label='Pesquisa']"),
+            (By.XPATH, "//span[.//*[@aria-label='Pesquisa']]"),
+            (By.XPATH, "//*[@viewBox='0 0 24 24']"),
+            (By.XPATH, "//span[.//*[@viewBox='0 0 24 24']]"),
+            (By.XPATH, "//*[contains(@class,'header-menu-icons')]"),
+            (By.XPATH, "//span[.//*[contains(@class,'header-menu-icons')]]"),
+            (By.XPATH, "//span[contains(@class,'search')]"),
+            (By.XPATH, "//input[@id='subheader_search_box']/preceding-sibling::*[1]"),
+            (By.XPATH, "//*[@role='img'][@aria-label='Pesquisa']"),
+            (By.XPATH, "//*[contains(@style,'stroke-miterlimit')]/ancestor::span[1]"),
+        ]
 
-        print("   - Lupa clicada com sucesso.")
+        for i, (by, seletor) in enumerate(estrategias_lupa, 1):
+            try:
+                print(f"   - Tentativa {i}: {seletor[:60]}...")
+                elemento = WebDriverWait(driver, 5).until(
+                    EC.element_to_be_clickable((by, seletor))
+                )
+                driver.execute_script("arguments[0].click();", elemento)
+                lupa_clicada = True
+                print(f"   ✅ Lupa clicada na tentativa {i}.")
+                break
+            except Exception:
+                print(f"   ❌ Tentativa {i} falhou.")
+                continue
+
+        if not lupa_clicada:
+            raise Exception("Não foi possível clicar na lupa após todas as tentativas.")
+
         time.sleep(0.8)
 
         # --- PASSO 2: Limpar e digitar o chamado ---
@@ -55,75 +78,103 @@ def validar_chamado_no_agilis(chamado, driver, wait):
 
         # --- PASSO 3: Aguardar e clicar no painel colapsável ---
         print("   - Aguardando painel da conversa...")
-
-        # Espera o painel aparecer com aria-expanded="false" (ainda fechado)
         painel = wait.until(EC.presence_of_element_located(
             (By.CSS_SELECTOR, "z-collapsiblepanel[data-conv_type='reply']")
         ))
 
-        # Verifica se já está expandido, se não, clica para expandir
         aria_expanded = painel.get_attribute("aria-expanded")
         if aria_expanded != "true":
-            print("   - Painel fechado, clicando para expandir...")
+            print("   - Painel fechado, expandindo via JavaScript...")
             header = painel.find_element(
                 By.CSS_SELECTOR,
                 "div.zcollapsiblepanel__header.zcollapsiblepanel--toggleableheader"
             )
-            driver.execute_script("arguments[0].click();", header)  # JS click mais confiável
-            print("   - Header clicado via JavaScript.")
+            driver.execute_script("arguments[0].click();", header)
         else:
             print("   - Painel já estava expandido.")
 
-        # --- PASSO 4: Aguardar o conteúdo carregar DENTRO do Web Component ---
-        print("   - Aguardando conteúdo do painel carregar...")
-
-        # Espera o div.panel-body aparecer DENTRO do z-collapsiblepanel
+        # --- PASSO 4: Tentar ler o panel-body ---
+        print("   - Tentando localizar o panel-body...")
+        painel_body = None
         try:
-            painel_body = WebDriverWait(painel, 15).until(
-                lambda d: painel.find_element(By.CSS_SELECTOR, "div.panel-body.p0")
-                if painel.find_elements(By.CSS_SELECTOR, "div.panel-body.p0")
-                else None
+            painel_body = WebDriverWait(driver, 8).until(
+                EC.presence_of_element_located(
+                    (By.CSS_SELECTOR,
+                     "z-collapsiblepanel[data-conv_type='reply'] div.panel-body.p0")
+                )
             )
+            print("   - panel-body encontrado.")
         except TimeoutException:
-            # Fallback: tenta buscar no documento inteiro
-            print("   - Tentativa fallback: buscando panel-body no documento...")
-            painel_body = wait.until(EC.presence_of_element_located(
-                (By.CSS_SELECTOR, "z-collapsiblepanel[data-conv_type='reply'] div.panel-body.p0")
-            ))
+            print("   - panel-body NÃO encontrado. Indo para verificação de status...")
 
-        conteudo = painel_body.text
-        print(f"   - Conteúdo lido: {conteudo[:80]}...")
+        # --- PASSO 5: VERIFICAÇÃO SUPREMA ---
+        if painel_body is not None:
+            conteudo = painel_body.text
+            conteudo_lower = conteudo.lower()
+            print(f"   - Conteúdo lido: {conteudo[:80]}...")
 
-        # --- PASSO 5: Verificar critérios ---
+            # ✅ VERIFICAÇÃO SUPREMA 1: Código de rastreio dos Correios (ex: AD531033047BR)
+            codigo_encontrado = PADRAO_RASTREIO.search(conteudo)
+            if codigo_encontrado:
+                print(f"   ✅ Chamado {chamado} MANTIDO "
+                      f"(código de rastreio encontrado: {codigo_encontrado.group()}).")
+                return True
 
-        # Critério 1: Tem código de rastreio → MANTER
-        if "segue o código de rastreio:" in conteudo:
-            print(f"   ✅ Chamado {chamado} MANTIDO (tem código de rastreio).")
-            return True
+            # ✅ VERIFICAÇÃO SUPREMA 2: Texto "encomenda enviada"
+            if "encomenda enviada" in conteudo_lower:
+                print(f"   ✅ Chamado {chamado} MANTIDO (contém 'encomenda enviada').")
+                return True
 
-        # Critério 2: Encomenda não recebida → REMOVER
-        if "Encomenda não recebida na mensageria." in conteudo:
-            print(f"   ❌ Chamado {chamado} REMOVIDO (encomenda não recebida).")
+            # ✅ VERIFICAÇÃO SUPREMA 3: Texto original "segue o código de rastreio:"
+            if "segue o código de rastreio:" in conteudo_lower:
+                print(f"   ✅ Chamado {chamado} MANTIDO (contém 'segue o código de rastreio').")
+                return True
+
+            # ❌ Nenhum critério de manutenção encontrado
+            print(f"   ❌ Chamado {chamado} REMOVIDO "
+                  f"(sem código de rastreio nem 'encomenda enviada').")
             return False
 
-        # Critério 3: Elemento anterior ao último vazio ou inexistente → REMOVER
-        paragrafos = painel_body.find_elements(By.TAG_NAME, "p")
-        if len(paragrafos) < 2:
-            print(f"   ❌ Chamado {chamado} REMOVIDO (menos de 2 parágrafos).")
-            return False
+        else:
+            # --- PASSO 6: Fallback - Verificar status do chamado ---
+            print("   - Verificando status do chamado no painel direito...")
+            try:
+                status_panel = WebDriverWait(driver, 8).until(
+                    EC.presence_of_element_located((By.ID, "status-right-panel"))
+                )
+                status_texto = status_panel.text.strip()
+                print(f"   - Status encontrado: '{status_texto}'")
 
-        penultimo = paragrafos[-2].text.strip()
-        if not penultimo:
-            print(f"   ❌ Chamado {chamado} REMOVIDO (penúltimo parágrafo vazio).")
-            return False
+                try:
+                    badge = status_panel.find_element(
+                        By.CSS_SELECTOR, "em.priority-badge"
+                    )
+                    cor_badge = badge.get_attribute("style")
+                    print(f"   - Cor do badge: {cor_badge}")
+                except Exception:
+                    cor_badge = ""
+                    print("   - Não foi possível ler a cor do badge.")
 
-        # Nenhum critério de manutenção → REMOVER
-        print(f"   ❌ Chamado {chamado} REMOVIDO (sem código de rastreio).")
-        return False
+                # Closed (verde) → REMOVER
+                if "006600" in cor_badge or "Closed" in status_texto:
+                    print(f"   ❌ Chamado {chamado} REMOVIDO (status: Closed).")
+                    return False
+
+                # Fechado (vermelho) → MANTER
+                if "ff0000" in cor_badge or "Fechado" in status_texto:
+                    print(f"   ✅ Chamado {chamado} MANTIDO (status: Fechado).")
+                    return True
+
+                print(f"   ⚠️ Chamado {chamado} MANTIDO (status desconhecido).")
+                return True
+
+            except TimeoutException:
+                print(f"   ⚠️ Chamado {chamado} REMOVIDO (status não encontrado).")
+                return False
 
     except TimeoutException:
-        print(f"   ⚠️ Timeout ao validar chamado {chamado}. Mantendo por precaução.")
-        return True
+        print(f"   ⚠️ Timeout ao validar chamado {chamado}. Removendo por falta de resposta.")
+        return False
     except Exception as e:
         print(f"   ⚠️ Erro inesperado ao validar chamado {chamado}: {e}")
         return True   
@@ -557,7 +608,7 @@ def processar_relatorio_email():
         # --- VALIDAÇÃO DOS CHAMADOS NO AGILIS ---
         print("\n--- Iniciando validação dos chamados no Agilis ---")
 
-        wait_validacao = WebDriverWait(driver, 30)
+        wait_validacao = WebDriverWait(driver, 1)
 
         try:
             driver.get("https://agilis.mrv.com.br/HomePage.do?view_type=my_view")
