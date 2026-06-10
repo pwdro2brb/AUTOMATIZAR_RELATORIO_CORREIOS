@@ -46,7 +46,6 @@ def validar_chamado_no_agilis(chamado, driver, wait):
 
         for i, (by, seletor) in enumerate(estrategias_lupa, 1):
             try:
-                print(f"   - Tentativa {i}: {seletor[:60]}...")
                 elemento = WebDriverWait(driver, 5).until(
                     EC.element_to_be_clickable((by, seletor))
                 )
@@ -55,7 +54,6 @@ def validar_chamado_no_agilis(chamado, driver, wait):
                 print(f"   ✅ Lupa clicada na tentativa {i}.")
                 break
             except Exception:
-                print(f"   ❌ Tentativa {i} falhou.")
                 continue
 
         if not lupa_clicada:
@@ -73,112 +71,108 @@ def validar_chamado_no_agilis(chamado, driver, wait):
         campo_busca.send_keys(Keys.DELETE)
         campo_busca.send_keys(str(chamado))
         campo_busca.send_keys(Keys.RETURN)
-        print("   - Enter pressionado.")
         time.sleep(2)
 
-        # --- PASSO 3: Aguardar e clicar no painel colapsável ---
-        print("   - Aguardando painel da conversa...")
-        painel = wait.until(EC.presence_of_element_located(
-            (By.CSS_SELECTOR, "z-collapsiblepanel[data-conv_type='reply']")
-        ))
-
-        aria_expanded = painel.get_attribute("aria-expanded")
-        if aria_expanded != "true":
-            print("   - Painel fechado, expandindo via JavaScript...")
-            header = painel.find_element(
-                By.CSS_SELECTOR,
-                "div.zcollapsiblepanel__header.zcollapsiblepanel--toggleableheader"
-            )
-            driver.execute_script("arguments[0].click();", header)
-        else:
-            print("   - Painel já estava expandido.")
-
-        # --- PASSO 4: Tentar ler o panel-body ---
-        print("   - Tentando localizar o panel-body...")
-        painel_body = None
+        # --- PASSO 3 e 4: Encontrar TODOS os painéis de resposta e iterar sobre eles ---
+        print("   - Procurando painéis de conversa...")
         try:
-            painel_body = WebDriverWait(driver, 8).until(
-                EC.presence_of_element_located(
-                    (By.CSS_SELECTOR,
-                     "z-collapsiblepanel[data-conv_type='reply'] div.panel-body.p0")
-                )
-            )
-            print("   - panel-body encontrado.")
-        except TimeoutException:
-            print("   - panel-body NÃO encontrado. Indo para verificação de status...")
+            # Usando presence_of_ALL_elements_located para pegar a lista de todos os painéis
+            paineis = wait.until(EC.presence_of_all_elements_located(
+                (By.CSS_SELECTOR, "z-collapsiblepanel[data-conv_type='reply']")
+            ))
+            print(f"   - Encontrados {len(paineis)} painéis de resposta. Verificando um por um...")
 
-        # --- PASSO 5: VERIFICAÇÃO SUPREMA ---
-        if painel_body is not None:
-            conteudo = painel_body.text
-            conteudo_lower = conteudo.lower()
-            print(f"   - Conteúdo lido: {conteudo[:80]}...")
-
-            # ✅ VERIFICAÇÃO SUPREMA 1: Código de rastreio dos Correios (ex: AD531033047BR)
-            codigo_encontrado = PADRAO_RASTREIO.search(conteudo)
-            if codigo_encontrado:
-                print(f"   ✅ Chamado {chamado} MANTIDO "
-                      f"(código de rastreio encontrado: {codigo_encontrado.group()}).")
-                return True
-
-            # ✅ VERIFICAÇÃO SUPREMA 2: Texto "encomenda enviada"
-            if "encomenda enviada" in conteudo_lower:
-                print(f"   ✅ Chamado {chamado} MANTIDO (contém 'encomenda enviada').")
-                return True
-
-            # ✅ VERIFICAÇÃO SUPREMA 3: Texto original "segue o código de rastreio:"
-            if "segue o código de rastreio:" in conteudo_lower:
-                print(f"   ✅ Chamado {chamado} MANTIDO (contém 'segue o código de rastreio').")
-                return True
-
-            # ❌ Nenhum critério de manutenção encontrado
-            print(f"   ❌ Chamado {chamado} REMOVIDO "
-                  f"(sem código de rastreio nem 'encomenda enviada').")
-            return False
-
-        else:
-            # --- PASSO 6: Fallback - Verificar status do chamado ---
-            print("   - Verificando status do chamado no painel direito...")
-            try:
-                status_panel = WebDriverWait(driver, 8).until(
-                    EC.presence_of_element_located((By.ID, "status-right-panel"))
-                )
-                status_texto = status_panel.text.strip()
-                print(f"   - Status encontrado: '{status_texto}'")
-
+            for index, painel in enumerate(paineis):
+                print(f"   - Analisando painel {index + 1} de {len(paineis)}...")
+                
+                # Expandir o painel se estiver fechado
+                aria_expanded = painel.get_attribute("aria-expanded")
+                if aria_expanded != "true":
+                    try:
+                        header = painel.find_element(
+                            By.CSS_SELECTOR,
+                            "div.zcollapsiblepanel__header.zcollapsiblepanel--toggleableheader"
+                        )
+                        driver.execute_script("arguments[0].click();", header)
+                        time.sleep(0.5) # Pequena pausa para a animação de expansão
+                    except Exception as e:
+                        print(f"     ⚠️ Erro ao expandir painel {index + 1}: {e}")
+                
+                # Tentar ler o panel-body específico deste painel
                 try:
-                    badge = status_panel.find_element(
-                        By.CSS_SELECTOR, "em.priority-badge"
+                    painel_body = painel.find_element(
+                        By.CSS_SELECTOR, "div.panel-body.p0"
                     )
-                    cor_badge = badge.get_attribute("style")
-                    print(f"   - Cor do badge: {cor_badge}")
-                except Exception:
-                    cor_badge = ""
-                    print("   - Não foi possível ler a cor do badge.")
+                    conteudo = painel_body.text
+                    conteudo_lower = conteudo.lower()
+                    
+                    # ✅ VERIFICAÇÃO SUPREMA 1: Código de rastreio dos Correios
+                    codigo_encontrado = PADRAO_RASTREIO.search(conteudo)
+                    if codigo_encontrado:
+                        print(f"   ✅ Chamado {chamado} MANTIDO (código de rastreio encontrado no painel {index + 1}: {codigo_encontrado.group()}).")
+                        return True
 
-                # Closed (verde) → REMOVER
-                if "006600" in cor_badge or "Closed" in status_texto:
-                    print(f"   ❌ Chamado {chamado} REMOVIDO (status: Closed).")
-                    return False
+                    # ✅ VERIFICAÇÃO SUPREMA 2: Texto "encomenda enviada"
+                    if "encomenda enviada" in conteudo_lower:
+                        print(f"   ✅ Chamado {chamado} MANTIDO (contém 'encomenda enviada' no painel {index + 1}).")
+                        return True
 
-                # Fechado (vermelho) → MANTER
-                if "ff0000" in cor_badge or "Fechado" in status_texto:
-                    print(f"   ✅ Chamado {chamado} MANTIDO (status: Fechado).")
-                    return True
+                    # ✅ VERIFICAÇÃO SUPREMA 3: Texto original "segue o código de rastreio:"
+                    if "segue o código de rastreio:" in conteudo_lower:
+                        print(f"   ✅ Chamado {chamado} MANTIDO (contém 'segue o código de rastreio' no painel {index + 1}).")
+                        return True
 
-                print(f"   ⚠️ Chamado {chamado} MANTIDO (status desconhecido).")
+                except Exception as e:
+                    print(f"     ⚠️ Não foi possível ler o corpo do painel {index + 1}.")
+                    continue # Vai para o próximo painel
+
+            # Se o loop terminar e não encontrar nada em nenhum painel
+            print(f"   ❌ Nenhum critério de manutenção encontrado nos {len(paineis)} painéis.")
+
+        except TimeoutException:
+            print("   - Nenhum painel de resposta encontrado. Indo para verificação de status...")
+
+        # --- PASSO 6: Fallback - Verificar status do chamado ---
+        print("   - Verificando status do chamado no painel direito...")
+        try:
+            status_panel = WebDriverWait(driver, 8).until(
+                EC.presence_of_element_located((By.ID, "status-right-panel"))
+            )
+            status_texto = status_panel.text.strip()
+            print(f"   - Status encontrado: '{status_texto}'")
+
+            try:
+                badge = status_panel.find_element(
+                    By.CSS_SELECTOR, "em.priority-badge"
+                )
+                cor_badge = badge.get_attribute("style")
+            except Exception:
+                cor_badge = ""
+
+            # Closed (verde) → REMOVER
+            if "006600" in cor_badge or "Closed" in status_texto:
+                print(f"   ❌ Chamado {chamado} REMOVIDO (status: Closed).")
+                return False
+
+            # Fechado (vermelho) → MANTER
+            if "ff0000" in cor_badge or "Fechado" in status_texto:
+                print(f"   ✅ Chamado {chamado} MANTIDO (status: Fechado).")
                 return True
 
-            except TimeoutException:
-                print(f"   ⚠️ Chamado {chamado} REMOVIDO (status não encontrado).")
-                return False
+            print(f"   ⚠️ Chamado {chamado} MANTIDO (status desconhecido).")
+            return True
+
+        except TimeoutException:
+            print(f"   ⚠️ Chamado {chamado} REMOVIDO (status não encontrado).")
+            return False
 
     except TimeoutException:
         print(f"   ⚠️ Timeout ao validar chamado {chamado}. Removendo por falta de resposta.")
         return False
     except Exception as e:
         print(f"   ⚠️ Erro inesperado ao validar chamado {chamado}: {e}")
-        return True   
-
+        return True
+    
 # ----------- Parte 1 Agilis ----------- # 
 # DEFINA SEUS DADOS DE LOGIN E A URL INICIAL
 URL_INICIAL = "https://agilis.mrv.com.br/HomePage.do?view_type=my_view"
@@ -209,7 +203,7 @@ try:
         EC.presence_of_element_located((By.ID, "i0116")) 
     )
     print("Preenchendo e-mail da Microsoft...")
-    email_field_microsoft.send_keys(" ")#Coloque o seu email aqui
+    email_field_microsoft.send_keys("pedro.henrsilva@mrv.com.br")#Coloque o seu email aqui
     WebDriverWait(driver, 10).until(EC.element_to_be_clickable((By.ID, "idSIButton9"))).click()
     
     # Preenche a senha (usando a variável segura)
@@ -217,7 +211,7 @@ try:
         EC.presence_of_element_located((By.ID, "i0118")) 
     )
     print("Preenchendo senha da Microsoft...")
-    password_field_microsoft.send_keys(" ")#Coloque a sua senha aqui
+    password_field_microsoft.send_keys("Felipe22-")#Coloque a sua senha aqui
     
     # Tenta clicar no botão "Entrar" (com loop anti-stale)
     print("Procurando o botão 'Entrar'...")
@@ -461,35 +455,30 @@ def processar_relatorio_email():
         # Pega a hora atual (apenas o componente da hora, em formato 24h)
         hora_atual = datetime.now().hour
 
-        # Condição: Se a hora atual for maior que 12 (ou seja, 13h em diante)
+        # Condição: Se a hora atual for maior ou igual a 12 (meio-dia em diante)
         if hora_atual >= 12:
-            print(f"A hora atual ({hora_atual}:00) é maior que 12:00. Removendo correspondências matutinas.")
-            
-            # Lista dos horários que queremos remover
-            horarios_para_excluir = ["11", "10", "09:", "08:", "07:", "06:"]
+            print(f"A hora atual ({hora_atual}:00) é 12:00 ou mais. Removendo correspondências matutinas.")
             
             # É importante recalcular a última linha, pois a primeira limpeza pode ter alterado o total.
-            # Usaremos a coluna K (11) como referência para esta verificação.
             last_row = ws.Cells(ws.Rows.Count, 11).End(xlUp).Row
             print(f"Verificando {last_row} linhas (de baixo para cima) na coluna K...")
 
             # Loop de baixo para cima novamente
             for i in range(last_row, 1, -1):
-                cell_value_k = str(ws.Cells(i, 11).Value)  # Pega o valor da Coluna K
+                # Usar .Text em vez de .Value garante que pegamos o texto exato que aparece no Excel
+                cell_text_k = str(ws.Cells(i, 11).Text)
 
-                # Verifica se algum dos horários da lista está no texto da célula
-                for horario in horarios_para_excluir:
-                    if horario in cell_value_k:
-                        ws.Rows(i).Delete()
-                        # Uma vez que a linha é deletada, podemos parar de verificar outros horários
-                        # e passar para a próxima linha (i-1).
-                        break
+                # O Regex abaixo procura pelo início do texto (^) ou um espaço (\s), 
+                # seguido das horas da manhã e os dois pontos (:).
+                # Isso impede que o dia "10/06" ou o minuto "14:11" acionem a exclusão por engano.
+                if re.search(r'(^|\s)(06|07|08|09|10|11):', cell_text_k):
+                    ws.Rows(i).Delete()
                         
             print("Remoção de correspondências matutinas concluída.")
 
         else:
             # Se não for depois do meio-dia, apenas informa e não faz nada.
-            print(f"A hora atual ({hora_atual}:00) não é maior que 12:00. Nenhuma remoção adicional será feita.")
+            print(f"A hora atual ({hora_atual}:00) ainda é de manhã. Nenhuma remoção adicional será feita.")
         
         # 2.9. Adicionar fórmulas (Agora sem SpecialCells)
         print("Editando: Adicionando fórmulas nas colunas M-R...")
@@ -561,21 +550,51 @@ def processar_relatorio_email():
         summary_header.AutoFilter()
         ws_summary.Columns("A:D").ColumnWidth = 22
 
-        # 2.13 Copiar Dados Visíveis para o Resumo (Agora sem SpecialCells)
-        print("Copiando dados filtrados para o Resumo (somente valores)...")
+        # 2.13 Copiar Dados para o Resumo (Transferência direta de valores)
+        print("Copiando dados para o Resumo (somente valores)...")
         if last_row > 1:
-            ws.Range(f"O2:O{last_row}").Copy()
-            ws_summary.Range("A3").PasteSpecial(Paste=xlPasteValues)
+            dest_last_row = 3 + (last_row - 2)
 
-            ws.Range(f"B2:B{last_row}").Copy()
-            ws_summary.Range("B3").PasteSpecial(Paste=xlPasteValues)
+            # --- CORREÇÃO 1: Evitar Notação Científica (E+) ---
+            ws_summary.Range(f"A3:A{dest_last_row}").NumberFormat = "0"
 
-            ws.Range(f"Q2:Q{last_row}").Copy()
-            ws_summary.Range("C3").PasteSpecial(Paste=xlPasteValues)
+            # Transferência direta de valores
+            ws_summary.Range(f"A3:A{dest_last_row}").Value = ws.Range(f"O2:O{last_row}").Value
+            ws_summary.Range(f"B3:B{dest_last_row}").Value = ws.Range(f"B2:B{last_row}").Value
+            ws_summary.Range(f"C3:C{dest_last_row}").Value = ws.Range(f"Q2:Q{last_row}").Value
+            ws_summary.Range(f"D3:D{dest_last_row}").Value = ws.Range(f"S2:S{last_row}").Value
+            
+            # --- CORREÇÃO 2 e 3: Limpeza geral (Asteriscos, Quebras de linha e Espaços) ---
+            print("Limpando asteriscos, quebras de linha e ajustando altura...")
+            
+            # Define o intervalo completo dos dados copiados (Colunas A até D)
+            intervalo_dados = ws_summary.Range(f"A3:D{dest_last_row}")
+            
+            # Substitui o asterisco literal (usando ~*) por nada
+            intervalo_dados.Replace("~*", "")
+            
+            # Remove as quebras de linha (Alt+Enter) de TODAS as colunas
+            intervalo_dados.Replace(chr(10), "")
+            intervalo_dados.Replace(chr(13), "")
+            
+            # Desativa a "Quebra de Texto Automática" (Wrap Text)
+            intervalo_dados.WrapText = False
+            
+            # Loop rápido para remover espaços em branco extras (strip) de todas as células
+            for row_idx in range(3, dest_last_row + 1):
+                for col_idx in range(1, 5): # Colunas A(1) até D(4)
+                    val_celula = ws_summary.Cells(row_idx, col_idx).Value
+                    if val_celula is not None and isinstance(val_celula, str):
+                        ws_summary.Cells(row_idx, col_idx).Value = val_celula.strip()
 
-            ws.Range(f"S2:S{last_row}").Copy()
-            ws_summary.Range("D3").PasteSpecial(Paste=xlPasteValues)
-            print("Dados copiados com sucesso.")
+            # Ajusta a altura das linhas automaticamente para o tamanho padrão (compacto)
+            ws_summary.Rows(f"3:{dest_last_row}").AutoFit()
+
+            # --- NOVO: Alinhamento das colunas A (Centro de Custo) e B (Chamado) ---
+            # Use -4152 para alinhar à DIREITA ou -4108 para CENTRALIZAR
+            ws_summary.Range(f"A3:B{dest_last_row}").HorizontalAlignment = -4152 
+
+            print("Dados copiados e formatados com sucesso.")
         else:
             print("AVISO: Nenhum dado filtrado para copiar.")
         
@@ -621,11 +640,19 @@ def processar_relatorio_email():
             for i in range(last_summary_row, 2, -1):  # De baixo para cima, a partir da linha 3
                 chamado = ws_summary.Cells(i, 2).Value  # Coluna B
 
-                if chamado and str(chamado).strip():
-                    manter = validar_chamado_no_agilis(str(chamado).strip(), driver, wait_validacao)
-                    if not manter:
-                        ws_summary.Rows(i).Delete()
-                        print(f"   Linha {i} deletada do Resumo.")
+                if chamado:
+                    # Converte para texto e remove espaços em branco
+                    chamado_str = str(chamado).strip()
+                    
+                    # CORREÇÃO: Se o Excel trouxe o número com ".0" no final, nós removemos
+                    if chamado_str.endswith('.0'):
+                        chamado_str = chamado_str[:-2] # Corta os dois últimos caracteres (".0")
+
+                    if chamado_str: # Verifica se não ficou vazio após a limpeza
+                        manter = validar_chamado_no_agilis(chamado_str, driver, wait_validacao)
+                        if not manter:
+                            ws_summary.Rows(i).Delete()
+                            print(f"   Linha {i} deletada do Resumo.")
                 else:
                     print(f"   Linha {i} ignorada (chamado vazio).")
 
