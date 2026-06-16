@@ -100,9 +100,14 @@ def validar_chamado_no_agilis(chamado, driver, wait):
                 
                 # Tentar ler o panel-body específico deste painel
                 try:
-                    painel_body = painel.find_element(
-                        By.CSS_SELECTOR, "div.panel-body.p0"
+                    
+                    painel_body = WebDriverWait(driver, 8).until(
+                        EC.presence_of_element_located(
+                            (By.CSS_SELECTOR,
+                            "z-collapsiblepanel[data-conv_type='reply'] div.panel-body.p0")
+                        )
                     )
+
                     conteudo = painel_body.text
                     conteudo_lower = conteudo.lower()
                     
@@ -203,7 +208,7 @@ try:
         EC.presence_of_element_located((By.ID, "i0116")) 
     )
     print("Preenchendo e-mail da Microsoft...")
-    email_field_microsoft.send_keys("pedro.henrsilva@mrv.com.br")#Coloque o seu email aqui
+    email_field_microsoft.send_keys(" ")#Coloque o seu email aqui
     WebDriverWait(driver, 10).until(EC.element_to_be_clickable((By.ID, "idSIButton9"))).click()
     
     # Preenche a senha (usando a variável segura)
@@ -211,7 +216,7 @@ try:
         EC.presence_of_element_located((By.ID, "i0118")) 
     )
     print("Preenchendo senha da Microsoft...")
-    password_field_microsoft.send_keys("Felipe22-")#Coloque a sua senha aqui
+    password_field_microsoft.send_keys(" ")#Coloque a sua senha aqui
     
     # Tenta clicar no botão "Entrar" (com loop anti-stale)
     print("Procurando o botão 'Entrar'...")
