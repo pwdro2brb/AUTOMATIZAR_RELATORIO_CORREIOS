@@ -118,8 +118,8 @@ def validar_chamado_no_agilis(chamado, driver, wait):
                         return True
 
                     # ✅ VERIFICAÇÃO SUPREMA 2: Texto "encomenda enviada"
-                    if "encomenda enviada" in conteudo_lower:
-                        print(f"   ✅ Chamado {chamado} MANTIDO (contém 'encomenda enviada' no painel {index + 1}).")
+                    if "encomenda enviada" in conteudo_lower or "encomenda recebida" in conteudo_lower:
+                        print(f"   ✅ Chamado {chamado} MANTIDO (contém 'encomenda enviada' ou 'encomenda recebida' no painel {index + 1}).")
                         return True
 
                     # ✅ VERIFICAÇÃO SUPREMA 3: Texto original "segue o código de rastreio:"
@@ -136,41 +136,8 @@ def validar_chamado_no_agilis(chamado, driver, wait):
 
         except TimeoutException:
             print("   - Nenhum painel de resposta encontrado. Indo para verificação de status...")
-
-        # --- PASSO 6: Fallback - Verificar status do chamado ---
-        print("   - Verificando status do chamado no painel direito...")
-        try:
-            status_panel = WebDriverWait(driver, 8).until(
-                EC.presence_of_element_located((By.ID, "status-right-panel"))
-            )
-            status_texto = status_panel.text.strip()
-            print(f"   - Status encontrado: '{status_texto}'")
-
-            try:
-                badge = status_panel.find_element(
-                    By.CSS_SELECTOR, "em.priority-badge"
-                )
-                cor_badge = badge.get_attribute("style")
-            except Exception:
-                cor_badge = ""
-
-            # Closed (verde) → REMOVER
-            if "006600" in cor_badge or "Closed" in status_texto:
-                print(f"   ❌ Chamado {chamado} REMOVIDO (status: Closed).")
-                return False
-
-            # Fechado (vermelho) → MANTER
-            if "ff0000" in cor_badge or "Fechado" in status_texto:
-                print(f"   ✅ Chamado {chamado} MANTIDO (status: Fechado).")
-                return True
-
-            print(f"   ⚠️ Chamado {chamado} MANTIDO (status desconhecido).")
-            return True
-
-        except TimeoutException:
-            print(f"   ⚠️ Chamado {chamado} REMOVIDO (status não encontrado).")
             return False
-
+        
     except TimeoutException:
         print(f"   ⚠️ Timeout ao validar chamado {chamado}. Removendo por falta de resposta.")
         return False
